@@ -297,7 +297,7 @@ def transfer_num(data):  # transfer num into "NUM"
             if re.search("\d*\(\d+/\d+\)\d*", num):
                 nums_fraction.append(num)
         nums_fraction = sorted(nums_fraction, key=lambda x: len(x), reverse=True)
-        print('nums_fraction:', nums_fraction)
+        # print('nums_fraction:', nums_fraction) nums_fraction: ['(5/16)', '(3/8)']
         # seg_and_tag: 130 / (1 - (7 / 20)) => ['N0', '/', '(', '1', '-', 'N1', ')']
         def seg_and_tag(st):  # seg the equation and tag the num
             res = []

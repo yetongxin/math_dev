@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-from group_attention import PositionwiseFeedForward, GroupAttention
-from transformer import Encoder, EncoderLayer
+from .group_attention import PositionwiseFeedForward, GroupAttention
+from .transformer import Encoder, EncoderLayer
 from copy import deepcopy
 
 
@@ -364,11 +364,17 @@ class EncoderRNNAttn(nn.Module):
     def forward(self, input_seqs, comma_index, full_stop_index, input_lengths=None):
         embedded = self.embedding(input_seqs)
         embedded = self.input_dropout(embedded)
-        embedded = nn.utils.rnn.pack_padded_sequence(embedded, input_lengths, batch_first=True)
+        # print('embedded shape:', embedded.shape, len(input_lengths))
+        embedded = nn.utils.rnn.pack_padded_sequence(embedded, input_lengths, batch_first=False)
         output, hidden = self.rnn(embedded)
 
-        output, _ = nn.utils.rnn.pad_packed_sequence(output, batch_first=True)
+        pade_outputs, _ = nn.utils.rnn.pad_packed_sequence(output, batch_first=False)
         src_mask = self.group_attention.get_mask(input_seqs, comma_index, full_stop_index)
-        output = self.onelayer(output, src_mask)
-        print('encoder  output shape:', output.shape)
-        return output, hidden
+        final_output = self.onelayer(pade_outputs, src_mask)
+        # print('pre  final output shape', final_output.shape)
+
+        problem_output = final_output[-1, :, :self.hidden_size] + final_output[0, :, self.hidden_size:]  # B x H
+        final_output = final_output[:, :, :self.hidden_size] + final_output[:, :, self.hidden_size:]  # S x B x H
+        # print('encoder  output shape:', final_output.shape)
+        # print('problem output shape:', problem_output.shape)
+        return final_output, problem_output
