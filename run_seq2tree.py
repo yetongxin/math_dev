@@ -45,8 +45,10 @@ for fold in range(5):
     input_lang, output_lang, train_pairs, test_pairs = prepare_data(pairs_trained, pairs_tested, 5, generate_nums,
                                                                     copy_nums, tree=True)
     # Initialize models
-    encoder = EncoderSeq(input_size=input_lang.n_words, embedding_size=embedding_size, hidden_size=hidden_size,
-                         n_layers=n_layers)
+    # encoder = EncoderSeq(input_size=input_lang.n_words, embedding_size=embedding_size, hidden_size=hidden_size,
+    #                      n_layers=n_layers)
+    encoder = EncoderRNNAttn(input_size=input_lang.n_words, embedding_size=embedding_size, hidden_size=hidden_size,
+                             n_layers=n_layers, dropout=0.5, d_ff=2048, N=1)
     predict = Prediction(hidden_size=hidden_size, op_nums=output_lang.n_words - copy_nums - 1 - len(generate_nums),
                          input_size=len(generate_nums))
     generate = GenerateNode(hidden_size=hidden_size, op_nums=output_lang.n_words - copy_nums - 1 - len(generate_nums),
@@ -89,7 +91,7 @@ for fold in range(5):
             loss = train_tree(
                 input_batches[idx], input_lengths[idx], output_batches[idx], output_lengths[idx],
                 num_stack_batches[idx], num_size_batches[idx], generate_num_ids, encoder, predict, generate, merge,
-                encoder_optimizer, predict_optimizer, generate_optimizer, merge_optimizer, output_lang, num_pos_batches[idx])
+                encoder_optimizer, predict_optimizer, generate_optimizer, merge_optimizer, output_lang, num_pos_batches[idx], input_lang)
             loss_total += loss
 
         print("loss:", loss_total / len(input_lengths))
@@ -101,8 +103,9 @@ for fold in range(5):
             eval_total = 0
             start = time.time()
             for test_batch in test_pairs:
+                # test_batch: (input_sentence_index, len(input_sentecnce), output_sentence_index, len(output_sentence), nums, num_pos, num_stack)
                 test_res = evaluate_tree(test_batch[0], test_batch[1], generate_num_ids, encoder, predict, generate,
-                                         merge, output_lang, test_batch[5], beam_size=beam_size)
+                                         merge, output_lang, test_batch[5], input_lang, beam_size=beam_size)
                 val_ac, equ_ac, _, _ = compute_prefix_tree_result(test_res, test_batch[2], output_lang, test_batch[4], test_batch[6])
                 if val_ac:
                     value_ac += 1

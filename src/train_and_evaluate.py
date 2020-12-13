@@ -375,7 +375,7 @@ def get_all_number_encoder_outputs(encoder_outputs, num_pos, batch_size, num_siz
     all_embedding = all_outputs.view(-1, encoder_outputs.size(2))  # S x B x H -> (B x S) x H
     all_num = all_embedding.index_select(0, indices)
     all_num = all_num.view(batch_size, num_size, hidden_size)
-    return all_num.masked_fill_(masked_index, 0.0)
+    return all_num.masked_fill_(masked_index.bool(), 0.0)
 
 
 def train_attn(input_batch, input_length, target_batch, target_length, num_batch, nums_stack_batch, copy_nums,
@@ -642,7 +642,7 @@ class TreeEmbedding:  # the class save the tree
 
 def train_tree(input_batch, input_length, target_batch, target_length, nums_stack_batch, num_size_batch, generate_nums,
                encoder, predict, generate, merge, encoder_optimizer, predict_optimizer, generate_optimizer,
-               merge_optimizer, output_lang, num_pos, english=False):
+               merge_optimizer, output_lang, num_pos, input_lang, english=False):
     # sequence mask for attention
     seq_mask = []
     max_len = max(input_length)
@@ -658,6 +658,8 @@ def train_tree(input_batch, input_length, target_batch, target_length, nums_stac
     num_mask = torch.ByteTensor(num_mask)
 
     unk = output_lang.word2index["UNK"]
+    comma_index = input_lang.word2index["，"]
+    full_stop_index = input_lang.word2index["．"]
 
     # Turn padded arrays into (batch_size x max_len) tensors, transpose into (max_len x batch_size)
     input_var = torch.LongTensor(input_batch).transpose(0, 1)
@@ -685,7 +687,8 @@ def train_tree(input_batch, input_length, target_batch, target_length, nums_stac
     merge_optimizer.zero_grad()
     # Run words through encoder
 
-    encoder_outputs, problem_output = encoder(input_var, input_length)
+    # problem_output：最后一个词的hidden_state
+    encoder_outputs, problem_output = encoder(input_var, comma_index, full_stop_index, input_length)
     # Prepare input and output variables
     node_stacks = [[TreeNode(_)] for _ in problem_output.split(1, dim=0)]
 
@@ -694,8 +697,10 @@ def train_tree(input_batch, input_length, target_batch, target_length, nums_stac
     all_node_outputs = []
     # all_leafs = []
 
-    copy_num_len = [len(_) for _ in num_pos]
-    num_size = max(copy_num_len)
+    copy_num_len = [len(_) for _ in num_pos]  # 每个问题中数字个数
+    num_size = max(copy_num_len)  # 出现最多数字个数
+    # encoder_outputs: (len, batch_size, hidden_size)
+    # all_nums_encoder_outputs:（batch_size, num_size, hidden_size)
     all_nums_encoder_outputs = get_all_number_encoder_outputs(encoder_outputs, num_pos, batch_size, num_size,
                                                               encoder.hidden_size)
 
@@ -703,19 +708,23 @@ def train_tree(input_batch, input_length, target_batch, target_length, nums_stac
     embeddings_stacks = [[] for _ in range(batch_size)]
     left_childs = [None for _ in range(batch_size)]
     for t in range(max_target_length):
+        # current_nums_embedding: 数字的embedding，由随机的1和pi的embedding和all_nums_encoder_outputs组成
         num_score, op, current_embeddings, current_context, current_nums_embeddings = predict(
             node_stacks, left_childs, encoder_outputs, all_nums_encoder_outputs, padding_hidden, seq_mask, num_mask)
 
         # all_leafs.append(p_leaf)
         outputs = torch.cat((op, num_score), 1)
         all_node_outputs.append(outputs)
-
+        # generate_input 将target中大于num_start的值置为0
         target_t, generate_input = generate_tree_input(target[t].tolist(), outputs, nums_stack_batch, num_start, unk)
         target[t] = target_t
         if USE_CUDA:
             generate_input = generate_input.cuda()
         left_child, right_child, node_label = generate(current_embeddings, generate_input, current_context)
         left_childs = []
+
+        # embedding_stack: TreeEmbedding stack(embedding, terminal)
+        # node_stack: TreeNode stack(info: embedding, left)
         for idx, l, r, node_stack, i, o in zip(range(batch_size), left_child.split(1), right_child.split(1),
                                                node_stacks, target[t].tolist(), embeddings_stacks):
             if len(node_stack) != 0:
@@ -724,11 +733,11 @@ def train_tree(input_batch, input_length, target_batch, target_length, nums_stac
                 left_childs.append(None)
                 continue
 
-            if i < num_start:
+            if i < num_start:  # 如果是操作符，node_stack推入左右孩子节点
                 node_stack.append(TreeNode(r))
                 node_stack.append(TreeNode(l, left_flag=True))
                 o.append(TreeEmbedding(node_label[idx].unsqueeze(0), False))
-            else:
+            else:  # 如果是数字，直接取encoder_ouput中具体数字的hidden_state
                 current_num = current_nums_embeddings[idx, i - num_start].unsqueeze(0)
                 while len(o) > 0 and o[-1].terminal:
                     sub_stree = o.pop()
@@ -767,7 +776,7 @@ def train_tree(input_batch, input_length, target_batch, target_length, nums_stac
     return loss.item()  # , loss_0.item(), loss_1.item()
 
 
-def evaluate_tree(input_batch, input_length, generate_nums, encoder, predict, generate, merge, output_lang, num_pos,
+def evaluate_tree(input_batch, input_length, generate_nums, encoder, predict, generate, merge, output_lang, num_pos, input_lang,
                   beam_size=5, english=False, max_length=MAX_OUTPUT_LENGTH):
 
     seq_mask = torch.ByteTensor(1, input_length).fill_(0)
@@ -776,6 +785,8 @@ def evaluate_tree(input_batch, input_length, generate_nums, encoder, predict, ge
 
     num_mask = torch.ByteTensor(1, len(num_pos) + len(generate_nums)).fill_(0)
 
+    comma_index = input_lang.word2index["，"]
+    full_stop_index = input_lang.word2index["．"]
     # Set to not-training mode to disable dropout
     encoder.eval()
     predict.eval()
@@ -793,7 +804,7 @@ def evaluate_tree(input_batch, input_length, generate_nums, encoder, predict, ge
         num_mask = num_mask.cuda()
     # Run words through encoder
 
-    encoder_outputs, problem_output = encoder(input_var, [input_length])
+    encoder_outputs, problem_output = encoder(input_var, comma_index, full_stop_index, [input_length])
 
     # Prepare input and output variables
     node_stacks = [[TreeNode(_)] for _ in problem_output.split(1, dim=0)]

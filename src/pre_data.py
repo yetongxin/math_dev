@@ -16,7 +16,7 @@ class Lang:
         self.word2count = {}
         self.index2word = []
         self.n_words = 0  # Count word tokens
-        self.num_start = 0
+        self.num_start = 0  # 词典中N0的索引
 
     def add_sen_to_vocab(self, sentence):  # add words of sentence to vocab
         for word in sentence:
@@ -297,7 +297,8 @@ def transfer_num(data):  # transfer num into "NUM"
             if re.search("\d*\(\d+/\d+\)\d*", num):
                 nums_fraction.append(num)
         nums_fraction = sorted(nums_fraction, key=lambda x: len(x), reverse=True)
-
+        print('nums_fraction:', nums_fraction)
+        # seg_and_tag: 130 / (1 - (7 / 20)) => ['N0', '/', '(', '1', '-', 'N1', ')']
         def seg_and_tag(st):  # seg the equation and tag the num
             res = []
             for n in nums_fraction:
@@ -308,7 +309,7 @@ def transfer_num(data):  # transfer num into "NUM"
                         res += seg_and_tag(st[:p_start])
                     if nums.count(n) == 1:
                         res.append("N"+str(nums.index(n)))
-                    else:
+                    else:  # 如果数字出现超过1次，直接添加数字
                         res.append(n)
                     if p_end < len(st):
                         res += seg_and_tag(st[p_end:])
@@ -332,6 +333,7 @@ def transfer_num(data):  # transfer num into "NUM"
             return res
 
         out_seq = seg_and_tag(equations)
+        # print('out_seq', equations, out_seq)
         for s in out_seq:  # tag the num which is generated
             if s[0].isdigit() and s not in generate_nums and s not in nums:
                 generate_nums.append(s)
@@ -646,6 +648,12 @@ def prepare_data(pairs_trained, pairs_tested, trim_min_count, generate_nums, cop
     else:
         output_lang.build_output_lang(generate_nums, copy_nums)
 
+    # 句子中存在重复数字，如果表达式使用到其中一个或多个，生成一个数组，其中元素为该数字在pair[2](所有数组）中的索引数组[[2,4],[2,4]]
+    # (['甲', '、', '乙', '、', '丙', 'NUM', '个数', '的', '平均数', '是', 'NUM', '，', '甲', '、', '乙', '、', '丙', '的', '比', '是', 'NUM',
+    #   '：', 'NUM', '：', 'NUM', '，', '丙', '数', '=', '．'], ['*', '*', 'N1', '3', '/', 'N4', '+', '+', 'N2', '3', 'N4'],
+    #  ['3', '12', '2', '3', '4'], [5, 10, 20, 22, 24])
+    #                               [[0, 3], [0, 3]]
+
     for pair in pairs_trained:
         num_stack = []
         for word in pair[1]:
@@ -659,9 +667,10 @@ def prepare_data(pairs_trained, pairs_tested, trim_min_count, generate_nums, cop
 
             if not flag_not and len(temp_num) != 0:
                 num_stack.append(temp_num)
-            if not flag_not and len(temp_num) == 0:
+            if not flag_not and len(temp_num) == 0: # 表达式的数字没有在PAIR[2]中出现设置为pair[2]
                 num_stack.append([_ for _ in range(len(pair[2]))])
-
+        # if len(num_stack):
+        #     print(pair, num_stack) #
         num_stack.reverse()
         input_cell = indexes_from_sentence(input_lang, pair[0])
         output_cell = indexes_from_sentence(output_lang, pair[1], tree)

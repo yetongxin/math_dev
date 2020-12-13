@@ -1,5 +1,8 @@
 import torch
 import torch.nn as nn
+from group_attention import PositionwiseFeedForward, GroupAttention
+from transformer import Encoder, EncoderLayer
+from copy import deepcopy
 
 
 class EncoderRNN(nn.Module):
@@ -125,7 +128,7 @@ class Score(nn.Module):
         score = score.squeeze(1)
         score = score.view(this_batch_size, -1)  # B x O
         if num_mask is not None:
-            score = score.masked_fill_(num_mask, -1e12)
+            score = score.masked_fill_(num_mask.bool(), -1e12)
         return score
 
 
@@ -152,38 +155,12 @@ class TreeAttn(nn.Module):
         attn_energies = attn_energies.squeeze(1)
         attn_energies = attn_energies.view(max_len, this_batch_size).transpose(0, 1)  # B x S
         if seq_mask is not None:
-            attn_energies = attn_energies.masked_fill_(seq_mask, -1e12)
+            attn_energies = attn_energies.masked_fill_(seq_mask.bool(), -1e12)
         attn_energies = nn.functional.softmax(attn_energies, dim=1)  # B x S
 
         return attn_energies.unsqueeze(1)
 
 
-class EncoderSeq(nn.Module):
-    def __init__(self, input_size, embedding_size, hidden_size, n_layers=2, dropout=0.5):
-        super(EncoderSeq, self).__init__()
-
-        self.input_size = input_size
-        self.embedding_size = embedding_size
-        self.hidden_size = hidden_size
-        self.n_layers = n_layers
-        self.dropout = dropout
-
-        self.embedding = nn.Embedding(input_size, embedding_size, padding_idx=0)
-        self.em_dropout = nn.Dropout(dropout)
-        self.gru_pade = nn.GRU(embedding_size, hidden_size, n_layers, dropout=dropout, bidirectional=True)
-
-    def forward(self, input_seqs, input_lengths, hidden=None):
-        # Note: we run this all at once (over multiple batches of multiple sequences)
-        embedded = self.embedding(input_seqs)  # S x B x E
-        embedded = self.em_dropout(embedded)
-        packed = torch.nn.utils.rnn.pack_padded_sequence(embedded, input_lengths)
-        pade_hidden = hidden
-        pade_outputs, pade_hidden = self.gru_pade(packed, pade_hidden)
-        pade_outputs, _ = torch.nn.utils.rnn.pad_packed_sequence(pade_outputs)
-
-        problem_output = pade_outputs[-1, :, :self.hidden_size] + pade_outputs[0, :, self.hidden_size:]
-        pade_outputs = pade_outputs[:, :, :self.hidden_size] + pade_outputs[:, :, self.hidden_size:]  # S x B x H
-        return pade_outputs, problem_output
 
 
 class Prediction(nn.Module):
@@ -213,6 +190,8 @@ class Prediction(nn.Module):
         self.attn = TreeAttn(hidden_size, hidden_size)
         self.score = Score(hidden_size * 2, hidden_size)
 
+    # node_stack:  [ batch_size * [最后一个hidden_state] ]
+    # left_childs: [ batch_size * None ]
     def forward(self, node_stacks, left_childs, encoder_outputs, num_pades, padding_hidden, seq_mask, mask_nums):
         current_embeddings = []
 
@@ -224,6 +203,8 @@ class Prediction(nn.Module):
                 current_embeddings.append(current_node.embedding)
 
         current_node_temp = []
+        # l: 每个数据的left_childs, c: 每个数据的node_stack栈顶元素，由栈顶+左子树生成新节点
+        # Equation (10) 和 （11）的后三条式子
         for l, c in zip(left_childs, current_embeddings):
             if l is None:
                 c = self.dropout(c)
@@ -237,10 +218,11 @@ class Prediction(nn.Module):
                 t = torch.sigmoid(self.concat_rg(torch.cat((ld, c), 1)))
                 current_node_temp.append(g * t)
 
-        current_node = torch.stack(current_node_temp)
+        # N: hidden_size
+        current_node = torch.stack(current_node_temp)  # B x 1 x N，将batch中各个问题当前步骤生成的Node整合
 
-        current_embeddings = self.dropout(current_node)
-
+        # attention
+        current_embeddings = self.dropout(current_node)  # B x 1 x N
         current_attn = self.attn(current_embeddings.transpose(0, 1), encoder_outputs, seq_mask)
         current_context = current_attn.bmm(encoder_outputs.transpose(0, 1))  # B x 1 x N
 
@@ -250,25 +232,26 @@ class Prediction(nn.Module):
 
         repeat_dims = [1] * self.embedding_weight.dim()
         repeat_dims[0] = batch_size
-        embedding_weight = self.embedding_weight.repeat(*repeat_dims)  # B x input_size x N
-        embedding_weight = torch.cat((embedding_weight, num_pades), dim=1)  # B x O x N
+        # repeat_dims = [64, 1, 1]
+        embedding_weight = self.embedding_weight.repeat(*repeat_dims)  # B x input_size x N (input_size为2： 1和3.14)
+        embedding_weight = torch.cat((embedding_weight, num_pades), dim=1)  # B x O x N （O：问题中数字的出现个数，加上1和3.14)
 
-        leaf_input = torch.cat((current_node, current_context), 2)
+        leaf_input = torch.cat((current_node, current_context), 2)  # B x 1 x 2N
         leaf_input = leaf_input.squeeze(1)
         leaf_input = self.dropout(leaf_input)
 
         # p_leaf = nn.functional.softmax(self.is_leaf(leaf_input), 1)
         # max pooling the embedding_weight
         embedding_weight_ = self.dropout(embedding_weight)
-        num_score = self.score(leaf_input.unsqueeze(1), embedding_weight_, mask_nums)
+        num_score = self.score(leaf_input.unsqueeze(1), embedding_weight_, mask_nums)  # B x (max(num_size_batch) + len(generate_nums))
 
         # num_score = nn.functional.softmax(num_score, 1)
 
-        op = self.ops(leaf_input)
-
+        op = self.ops(leaf_input)  # B x 5 (+-*/^)
         # return p_leaf, num_score, op, current_embeddings, current_attn
 
         return num_score, op, current_node, current_context, embedding_weight
+
 
 
 class GenerateNode(nn.Module):
@@ -285,6 +268,7 @@ class GenerateNode(nn.Module):
         self.generate_lg = nn.Linear(hidden_size * 2 + embedding_size, hidden_size)
         self.generate_rg = nn.Linear(hidden_size * 2 + embedding_size, hidden_size)
 
+    # Equation (10)
     def forward(self, node_embedding, node_label, current_context):
         node_label_ = self.embeddings(node_label)
         node_label = self.em_dropout(node_label_)
@@ -313,6 +297,7 @@ class Merge(nn.Module):
         self.merge = nn.Linear(hidden_size * 2 + embedding_size, hidden_size)
         self.merge_g = nn.Linear(hidden_size * 2 + embedding_size, hidden_size)
 
+    # Equation (13)
     def forward(self, node_embedding, sub_tree_1, sub_tree_2):
         sub_tree_1 = self.em_dropout(sub_tree_1)
         sub_tree_2 = self.em_dropout(sub_tree_2)
@@ -322,3 +307,68 @@ class Merge(nn.Module):
         sub_tree_g = torch.sigmoid(self.merge_g(torch.cat((node_embedding, sub_tree_1, sub_tree_2), 1)))
         sub_tree = sub_tree * sub_tree_g
         return sub_tree
+
+
+class EncoderSeq(nn.Module):
+    def __init__(self, input_size, embedding_size, hidden_size, n_layers=2, dropout=0.5):
+        super(EncoderSeq, self).__init__()
+
+        self.input_size = input_size
+        self.embedding_size = embedding_size
+        self.hidden_size = hidden_size
+        self.n_layers = n_layers
+        self.dropout = dropout
+
+        self.embedding = nn.Embedding(input_size, embedding_size, padding_idx=0)
+        self.em_dropout = nn.Dropout(dropout)
+        self.gru_pade = nn.GRU(embedding_size, hidden_size, n_layers, dropout=dropout, bidirectional=True)
+
+    def forward(self, input_seqs, input_lengths, hidden=None):
+        # Note: we run this all at once (over multiple batches of multiple sequences)
+        embedded = self.embedding(input_seqs)  # S x B x E
+        embedded = self.em_dropout(embedded)
+        packed = torch.nn.utils.rnn.pack_padded_sequence(embedded, input_lengths)
+        pade_hidden = hidden
+        pade_outputs, pade_hidden = self.gru_pade(packed, pade_hidden)
+        pade_outputs, _ = torch.nn.utils.rnn.pad_packed_sequence(pade_outputs)
+
+        problem_output = pade_outputs[-1, :, :self.hidden_size] + pade_outputs[0, :, self.hidden_size:]  # B x H
+        pade_outputs = pade_outputs[:, :, :self.hidden_size] + pade_outputs[:, :, self.hidden_size:]  # S x B x H
+        return pade_outputs, problem_output
+
+
+class EncoderRNNAttn(nn.Module):
+    def __init__(self, input_size, embedding_size, hidden_size, n_layers=1, dropout=0.5, d_ff=2048, N=1):
+        super(EncoderRNNAttn, self).__init__()
+        self.input_size = input_size
+        self.embedding_size = embedding_size
+        self.hidden_size = hidden_size
+        self.n_layers = n_layers
+        self.dropout = dropout
+
+        # self.variable_lengths = variable_lengths
+        self.bidirectional = True
+        if self.bidirectional:
+            self.d_model = 2*hidden_size
+        else:
+            self.d_model = hidden_size
+        ff = PositionwiseFeedForward(self.d_model, d_ff, dropout)
+        self.embedding = nn.Embedding(input_size, embedding_size)
+        self.input_dropout = nn.Dropout(p=dropout)
+
+        self.rnn = nn.GRU(embedding_size, hidden_size, n_layers, batch_first=False, bidirectional=True,
+                          dropout=dropout)  # todo: batch_first
+        self.group_attention = GroupAttention(8, self.d_model)
+        self.onelayer = Encoder(EncoderLayer(self.d_model, deepcopy(self.group_attention), deepcopy(ff), dropout), N)
+
+    def forward(self, input_seqs, comma_index, full_stop_index, input_lengths=None):
+        embedded = self.embedding(input_seqs)
+        embedded = self.input_dropout(embedded)
+        embedded = nn.utils.rnn.pack_padded_sequence(embedded, input_lengths, batch_first=True)
+        output, hidden = self.rnn(embedded)
+
+        output, _ = nn.utils.rnn.pad_packed_sequence(output, batch_first=True)
+        src_mask = self.group_attention.get_mask(input_seqs, comma_index, full_stop_index)
+        output = self.onelayer(output, src_mask)
+        print('encoder  output shape:', output.shape)
+        return output, hidden
