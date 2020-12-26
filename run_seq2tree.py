@@ -5,7 +5,12 @@ import time
 import torch.optim
 from src.expressions_transfer import *
 from src.global_vars import set_input_lang, set_output_lang
+import os
 
+if not os.path.exists('error'):
+    os.makedirs('error')
+if not os.path.exists('models'):
+    os.makedirs('models')
 batch_size = 64
 embedding_size = 128
 hidden_size = 512
@@ -33,6 +38,13 @@ for split_fold in range(4):
 fold_pairs.append(pairs[(fold_size * 4):])
 
 best_acc_fold = []
+
+
+def writeFile(arr, fold, times):
+    filename = 'error/' + fold + '-' + times + '.txt'
+    with open(filename, 'wt') as f:
+        for line in arr:
+            f.write(line)
 
 for fold in range(5):
     pairs_tested = []
@@ -80,6 +92,7 @@ for fold in range(5):
     for num in generate_nums:
         generate_num_ids.append(output_lang.word2index[num])
 
+    evalate_times = 0
     for epoch in range(n_epochs):
         encoder_scheduler.step()
         predict_scheduler.step()
@@ -101,6 +114,7 @@ for fold in range(5):
         print("training time", time_since(time.time() - start))
         print("--------------------------------")
         if epoch % 10 == 0 or epoch > n_epochs - 5:
+            evalate_times += 1
             value_ac = 0
             equation_ac = 0
             eval_total = 0
@@ -109,16 +123,21 @@ for fold in range(5):
                 # test_batch: (input_sentence_index, len(input_sentecnce), output_sentence_index, len(output_sentence), nums, num_pos, num_stack)
                 test_res = evaluate_tree(test_batch[0], test_batch[1], generate_num_ids, encoder, predict, generate,
                                          merge, output_lang, test_batch[5], input_lang, beam_size=beam_size)
-                val_ac, equ_ac, _, _ = compute_prefix_tree_result(test_res, test_batch[2], output_lang, test_batch[4], test_batch[6])
+                val_ac, equ_ac, gen_res, tar_res = compute_prefix_tree_result(test_res, test_batch[2], output_lang, test_batch[4], test_batch[6])
+                error_list = []
                 if val_ac:
                     value_ac += 1
                 if equ_ac:
                     equation_ac += 1
+                if val_ac == False and equ_ac == False:
+                    error_list.append(''.join(input_lang.index2string(test_batch[0]), gen_res, tar_res))
                 eval_total += 1
+
             print(equation_ac, value_ac, eval_total)
             print("test_answer_acc", float(equation_ac) / eval_total, float(value_ac) / eval_total)
             print("testing time", time_since(time.time() - start))
             print("------------------------------------------------------")
+            writeFile(error_list, fold, evalate_times)
             torch.save(encoder.state_dict(), "models/encoder")
             torch.save(predict.state_dict(), "models/predict")
             torch.save(generate.state_dict(), "models/generate")
