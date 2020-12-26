@@ -79,6 +79,9 @@ class Lang:
         for i, j in enumerate(self.index2word):
             self.word2index[j] = i
 
+    def index2string(self, src):
+        return [self.index2word[index] for index in src if index != self.word2index['PAD']]
+
 
 def load_raw_data(filename):  # load the json data to list(dict()) for MATH 23K
     print("Reading lines...")

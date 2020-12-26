@@ -690,6 +690,7 @@ def train_tree(input_batch, input_length, target_batch, target_length, nums_stac
     # problem_output：最后一个词的hidden_state
     encoder_outputs, problem_output = encoder(input_var, comma_index, full_stop_index, input_length)
     # Prepare input and output variables
+    # print('encoder_outputs, problem_output', encoder_outputs.shape, problem_output.shape, problem_output.split(1, dim=0))
     node_stacks = [[TreeNode(_)] for _ in problem_output.split(1, dim=0)]
 
     max_target_length = max(target_length)

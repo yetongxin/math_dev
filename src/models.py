@@ -208,6 +208,7 @@ class Prediction(nn.Module):
         for l, c in zip(left_childs, current_embeddings):
             if l is None:
                 c = self.dropout(c)
+                # print('concat l, shape', c.shape)
                 g = torch.tanh(self.concat_l(c))
                 t = torch.sigmoid(self.concat_lg(c))
                 current_node_temp.append(g * t)
@@ -359,9 +360,10 @@ class EncoderRNNAttn(nn.Module):
         self.rnn = nn.GRU(embedding_size, hidden_size, n_layers, batch_first=False, bidirectional=True,
                           dropout=dropout)  # todo: batch_first
         self.group_attention = GroupAttention(8, self.d_model)
-        self.onelayer = Encoder(EncoderLayer(self.d_model, deepcopy(self.group_attention), deepcopy(ff), dropout), N)
+        self.onelayer = Encoder(EncoderLayer(self.d_model, deepcopy(self.group_attention), deepcopy(ff), dropout), N) # 另一个项目的dropout=0.3
 
     def forward(self, input_seqs, comma_index, full_stop_index, input_lengths=None):
+
         embedded = self.embedding(input_seqs)
         embedded = self.input_dropout(embedded)
         # print('embedded shape:', embedded.shape, len(input_lengths))
@@ -369,12 +371,19 @@ class EncoderRNNAttn(nn.Module):
         output, hidden = self.rnn(embedded)
 
         pade_outputs, _ = nn.utils.rnn.pad_packed_sequence(output, batch_first=False)
-        src_mask = self.group_attention.get_mask(input_seqs, comma_index, full_stop_index)
-        final_output = self.onelayer(pade_outputs, src_mask)
-        # print('pre  final output shape', final_output.shape)
+        src_mask = self.group_attention.get_mask(input_seqs.transpose(0,1), comma_index, full_stop_index)
 
-        problem_output = final_output[-1, :, :self.hidden_size] + final_output[0, :, self.hidden_size:]  # B x H
+        # pade_outputs = pade_outputs[:, :, :self.hidden_size] + pade_outputs[:, :, self.hidden_size:]
+        # 给Onelayer的是bidirectional tensor
+        final_output = self.onelayer(pade_outputs.transpose(0, 1), src_mask)
+
         final_output = final_output[:, :, :self.hidden_size] + final_output[:, :, self.hidden_size:]  # S x B x H
+
+        # print('pre  pade_outputs shape', pade_outputs.shape, final_output.shape, src_mask.shape)
+
+        # problem_output = final_output[:, -1, :self.hidden_size] + final_output[:, 0, self.hidden_size:]  # B x H
+        problem_output = final_output[:, -1, :]
+        # print('final output shape', final_output.shape)
         # print('encoder  output shape:', final_output.shape)
         # print('problem output shape:', problem_output.shape)
-        return final_output, problem_output
+        return final_output.transpose(0, 1), problem_output

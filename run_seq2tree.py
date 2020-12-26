@@ -4,6 +4,7 @@ from src.models import *
 import time
 import torch.optim
 from src.expressions_transfer import *
+from src.global_vars import set_input_lang, set_output_lang
 
 batch_size = 64
 embedding_size = 128
@@ -44,6 +45,8 @@ for fold in range(5):
 
     input_lang, output_lang, train_pairs, test_pairs = prepare_data(pairs_trained, pairs_tested, 5, generate_nums,
                                                                     copy_nums, tree=True)
+    set_input_lang(input_lang)
+    set_output_lang(output_lang)
     # Initialize models
     # encoder = EncoderSeq(input_size=input_lang.n_words, embedding_size=embedding_size, hidden_size=hidden_size,
     #                      n_layers=n_layers)

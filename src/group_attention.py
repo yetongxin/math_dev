@@ -4,29 +4,36 @@ import torch.nn.functional as F
 import numpy as np
 import copy
 import math
+import src.global_vars as gl
 # from .transformer_part import group_mask,src_to_mask
 
 
 # 按逗号分割，相同的子句中设置为同一个token，遇到新逗号时token+1, 问题句子的token设置为1000
 def src_to_mask(src, comma_index, full_stop_index):
+    input_lang = gl.get_input_lang()
+    pad_index  = input_lang.word2index['PAD']
+    question_index = input_lang.word2index['？']
     # src shape: [batch_size, seq_len]
     src = src.cpu().numpy()
     batch_data_mask_tok = []
     for encode_sen_idx in src:
-
+        # print(''.join(input_lang.index2string(encode_sen_idx)), question_index, question_index in encode_sen_idx)
         token = 1
         mask = [0] * len(encode_sen_idx)
         for num in range(len(encode_sen_idx)):
             mask[num] = token
-            if (encode_sen_idx[num] == comma_index or encode_sen_idx[num] == full_stop_index) \
+            if (encode_sen_idx[num] == comma_index or encode_sen_idx[num] == full_stop_index or encode_sen_idx[num] == question_index)\
                     and num != len(encode_sen_idx) - 1:
                 token += 1
-            if encode_sen_idx[num] == 0:
+            if encode_sen_idx[num] == pad_index:
                 mask[num] = 0
+
+        token -= 1
         for num in range(len(encode_sen_idx)):
             if mask[num] == token and token != 1:
                 mask[num] = 1000
         batch_data_mask_tok.append(mask)
+        # print(mask)
     # [[1, 1, 1, 2, 2, 2, 3, 3,1000, 1000, 0, 0,...], [1, 1, 1, 2, 2, 2, 3, 3,1000, 1000, 0, 0,...],  ... ]
     return np.array(batch_data_mask_tok)
 
@@ -187,23 +194,18 @@ class GroupAttention(nn.Module):
         src_mask_self = torch.from_numpy(group_mask(mask, "self", pad).astype('uint8')).unsqueeze(1)
         src_mask_between = torch.from_numpy(group_mask(mask, "between", pad).astype('uint8')).unsqueeze(1)
         src_mask_question = torch.from_numpy(group_mask(mask, "question", pad).astype('uint8')).unsqueeze(1)
+        # print('src_mask_self.shape', src_mask_self.shape)
         src_mask_global = (src != pad).unsqueeze(-2).unsqueeze(1)
         src_mask_global = src_mask_global.expand(src_mask_self.shape)
-        # print('src shape:',  src.size())
-        # print('src_mask_self shape:', self.src_mask_self.size())
-        # print('src_mask_between shape:', self.src_mask_between.size())
-        # print('src_mask_question shape:', self.src_mask_question.size())
-        # print('src_mask_global shape:', self.src_mask_question.size())
-        final = torch.cat((src_mask_between.cuda(), src_mask_self.cuda(),
-                                src_mask_global.cuda(), src_mask_question.cuda()), 1)
-
+        final = torch.cat((src_mask_self.cuda(), src_mask_between.cuda(),
+                           src_mask_question.cuda(), src_mask_global.cuda()), 1)
         # print('final shape', self.final.size())
         return final.cuda()
 
     def forward(self, query, key, value, mask=None):
         #print("query",query,"\nkey",key,"\nvalue",value)
         "Implements Figure 2"
-
+        # print('mask shape', mask.shape)
         if mask is not None and len(mask.shape)<4:
             # Same mask applied to all h heads.
             mask = mask.unsqueeze(1)
