@@ -197,8 +197,8 @@ class GroupAttention(nn.Module):
         # print('src_mask_self.shape', src_mask_self.shape)
         src_mask_global = (src != pad).unsqueeze(-2).unsqueeze(1)
         src_mask_global = src_mask_global.expand(src_mask_self.shape)
-        final = torch.cat((src_mask_self.cuda(), src_mask_between.cuda(),
-                           src_mask_question.cuda(), src_mask_global.cuda()), 1)
+        final = torch.cat((src_mask_between.cuda(), src_mask_self.cuda(),
+                                src_mask_global.cuda(), src_mask_question.cuda()), 1)
         # print('final shape', self.final.size())
         return final.cuda()
 

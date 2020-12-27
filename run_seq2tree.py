@@ -14,7 +14,7 @@ if not os.path.exists('models'):
 batch_size = 64
 embedding_size = 128
 hidden_size = 512
-n_epochs = 80
+n_epochs = 100
 learning_rate = 1e-3
 weight_decay = 1e-5
 beam_size = 5
@@ -41,10 +41,11 @@ best_acc_fold = []
 
 
 def writeFile(arr, fold, times):
-    filename = 'error/' + fold + '-' + times + '.txt'
-    with open(filename, 'wt') as f:
-        for line in arr:
-            f.write(line)
+  filename = 'error/' + str(fold) + '-' + str(times) + '.txt'
+  f = open(filename, 'wt')
+  print(arr[0:10])
+  f.writelines(arr)
+  f.close()
 
 for fold in range(5):
     pairs_tested = []
@@ -55,8 +56,10 @@ for fold in range(5):
         else:
             pairs_trained += fold_pairs[fold_t]
 
-    input_lang, output_lang, train_pairs, test_pairs = prepare_data(pairs_trained, pairs_tested, 5, generate_nums,
+    print('pair_tested len:', len(pairs_tested))
+    input_lang, output_lang, train_pairs, test_pairs = prepare_data(pairs_trained, pairs_tested, 1, generate_nums,
                                                                     copy_nums, tree=True)
+    print(test_pairs[0], ' ',test_pairs[1])
     set_input_lang(input_lang)
     set_output_lang(output_lang)
     # Initialize models
@@ -113,27 +116,27 @@ for fold in range(5):
         print("loss:", loss_total / len(input_lengths))
         print("training time", time_since(time.time() - start))
         print("--------------------------------")
-        if epoch % 10 == 0 or epoch > n_epochs - 5:
+        if (epoch+1) % 10 == 0 or epoch > n_epochs - 5:
             evalate_times += 1
             value_ac = 0
             equation_ac = 0
             eval_total = 0
             start = time.time()
+            error_list = []
             for test_batch in test_pairs:
                 # test_batch: (input_sentence_index, len(input_sentecnce), output_sentence_index, len(output_sentence), nums, num_pos, num_stack)
                 test_res = evaluate_tree(test_batch[0], test_batch[1], generate_num_ids, encoder, predict, generate,
                                          merge, output_lang, test_batch[5], input_lang, beam_size=beam_size)
                 val_ac, equ_ac, gen_res, tar_res = compute_prefix_tree_result(test_res, test_batch[2], output_lang, test_batch[4], test_batch[6])
-                error_list = []
                 if val_ac:
                     value_ac += 1
                 if equ_ac:
                     equation_ac += 1
                 if val_ac == False and equ_ac == False:
-                    error_list.append(''.join(input_lang.index2string(test_batch[0]), gen_res, tar_res))
+                  tmp = input_lang.index2string(test_batch[0])
+                  error_list.append(tmp + ' '.join(map(str, gen_res)) + '.real:' + ' '.join(map(str, tar_res)) + '\n')
                 eval_total += 1
 
-            print(equation_ac, value_ac, eval_total)
             print("test_answer_acc", float(equation_ac) / eval_total, float(value_ac) / eval_total)
             print("testing time", time_since(time.time() - start))
             print("------------------------------------------------------")

@@ -377,8 +377,9 @@ class EncoderRNNAttn(nn.Module):
         # 给Onelayer的是bidirectional tensor
         final_output = self.onelayer(pade_outputs.transpose(0, 1), src_mask)
 
-        final_output = final_output[:, :, :self.hidden_size] + final_output[:, :, self.hidden_size:]  # S x B x H
-
+        # 或许可以尝试使用concat的方式
+        final_output = final_output[:, :, :self.hidden_size] + final_output[:, :, self.hidden_size:]  # B x S x H
+        print('final output shape', final_output.shape)
         # print('pre  pade_outputs shape', pade_outputs.shape, final_output.shape, src_mask.shape)
 
         # problem_output = final_output[:, -1, :self.hidden_size] + final_output[:, 0, self.hidden_size:]  # B x H
