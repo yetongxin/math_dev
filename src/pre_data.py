@@ -94,6 +94,7 @@ def load_raw_data(filename):  # load the json data to list(dict()) for MATH 23K
         if i % 7 == 0:  # every 7 line is a json
             data_d = json.loads(js)
             if "千米/小时" in data_d["equation"]:
+                print('=================', data_d)
                 data_d["equation"] = data_d["equation"][:-5]
             data.append(data_d)
             js = ""
@@ -299,11 +300,14 @@ def transfer_num(data):  # transfer num into "NUM"
         for num in nums:
             if re.search("\d*\(\d+/\d+\)\d*", num):
                 nums_fraction.append(num)
+            if re.search("\d+\(\d+/\d+\)\d*", num):
+                print('=-======================',num, d["segmented_text"])
         nums_fraction = sorted(nums_fraction, key=lambda x: len(x), reverse=True)
         # print('nums_fraction:', nums_fraction) nums_fraction: ['(5/16)', '(3/8)']
         # seg_and_tag: 130 / (1 - (7 / 20)) => ['N0', '/', '(', '1', '-', 'N1', ')']
         def seg_and_tag(st):  # seg the equation and tag the num
             res = []
+            flag = False
             for n in nums_fraction:
                 if n in st:
                     p_start = st.find(n)
@@ -313,6 +317,7 @@ def transfer_num(data):  # transfer num into "NUM"
                     if nums.count(n) == 1:
                         res.append("N"+str(nums.index(n)))
                     else:  # 如果数字出现超过1次，直接添加数字
+                        flag = True
                         res.append(n)
                     if p_end < len(st):
                         res += seg_and_tag(st[p_end:])
@@ -333,9 +338,11 @@ def transfer_num(data):  # transfer num into "NUM"
                 return res
             for ss in st:
                 res.append(ss)
+            # if flag:
             return res
 
         out_seq = seg_and_tag(equations)
+
         # print('out_seq', equations, out_seq)
         for s in out_seq:  # tag the num which is generated
             if s[0].isdigit() and s not in generate_nums and s not in nums:

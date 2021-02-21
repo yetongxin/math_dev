@@ -21,14 +21,14 @@ beam_size = 5
 n_layers = 2
 
 data = load_raw_data("data/Math_23K.json")
-
+print('data:', data[0])
 pairs, generate_nums, copy_nums = transfer_num(data)
-
+print('size:', len(pairs), pairs[0])
 temp_pairs = []
 for p in pairs:
     temp_pairs.append((p[0], from_infix_to_prefix(p[1]), p[2], p[3]))
 pairs = temp_pairs
-
+print('before split', pairs[0])
 fold_size = int(len(pairs) * 0.2)
 fold_pairs = []
 for split_fold in range(4):
@@ -55,11 +55,10 @@ for fold in range(5):
             pairs_tested += fold_pairs[fold_t]
         else:
             pairs_trained += fold_pairs[fold_t]
-
-    print('pair_tested len:', len(pairs_tested))
-    input_lang, output_lang, train_pairs, test_pairs = prepare_data(pairs_trained, pairs_tested, 1, generate_nums,
+    input_lang, output_lang, train_pairs, test_pairs = prepare_data(pairs_trained, pairs_tested, 5, generate_nums,
                                                                     copy_nums, tree=True)
-    print(test_pairs[0], ' ',test_pairs[1])
+    # print('before train:', len(train_pairs), len(test_pairs), train_pairs[0])
+    # print(input_lang.index2string(test_pairs[0][0]), input_lang.index2string(test_pairs[1][0]));
     set_input_lang(input_lang)
     set_output_lang(output_lang)
     # Initialize models

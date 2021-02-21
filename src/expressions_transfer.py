@@ -100,6 +100,7 @@ def from_infix_to_prefix(expression):
 
 
 def out_expression_list(test, output_lang, num_list, num_stack=None):
+    print('+++++++++++++++++++++', test, num_list)
     max_index = output_lang.n_words
     res = []
     for i in test:
